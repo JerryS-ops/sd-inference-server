@@ -26,8 +26,7 @@ CONTROLNET_MODELS = {
     "Normal": "https://huggingface.co/lllyasviel/ControlNet-v1-1/resolve/main/control_v11p_sd15_normalbae.pth",
     "Scribble": "https://huggingface.co/lllyasviel/ControlNet-v1-1/resolve/main/control_v11p_sd15_scribble.pth",
     "Segmentation": "https://huggingface.co/lllyasviel/ControlNet-v1-1/resolve/main/control_v11p_sd15_seg.pth",
-    "QR": "https://huggingface.co/monster-labs/control_v1p_sd15_qrcode_monster/resolve/main/v2/control_v1p_sd15_qrcode_monster_v2.safetensors",
-    "Anyline": "https://huggingface.co/TheMistoAI/MistoLine/resolve/main/mistoLine_fp16.safetensors"
+    "QR": "https://huggingface.co/monster-labs/control_v1p_sd15_qrcode_monster/resolve/main/v2/control_v1p_sd15_qrcode_monster_v2.safetensors"
 }
 
 def cv2_to_pil(img):
@@ -79,12 +78,7 @@ def annotate(img, annotator, model, arg, mask=None, standalone=False):
 
     return c, cv2_to_pil(img), pose
 
-def preprocess_control(images, models, opts, masks=[]):
-    annotators = [o["annotator"] for o in opts]
-    scales = [o["scale"] for o in opts]
-    args = [o["args"] for o in opts]
-    guess = [o["guess"] for o in opts]
-    stop = [o["stop"] for o in opts]
+def preprocess_control(images, annotators, models, args, scales, guess, masks=[]):
     conditioning = []
     outputs = []
 
@@ -94,10 +88,10 @@ def preprocess_control(images, models, opts, masks=[]):
         mask = None
 
     for i in range(len(images)):
-        sc, gs, an, md, arg, im, st = scales[i], guess[i], annotators[i], models[i], args[i], images[i], stop[i]
+        sc, gs, an, md, arg, im = scales[i], guess[i], annotators[i], models[i], args[i], images[i]
         cond, out, _ = annotate(im, an, md, arg, mask)
         outputs += [out]
-        conditioning += [(sc,gs,st,cond)]
+        conditioning += [(sc,gs,cond)]
     return conditioning, outputs
 
 def get_controlnet(name, folder, callback):
@@ -116,20 +110,12 @@ class ControlledUNET:
         self.controlnet_cond = None
     
     def set_controlnet_conditioning(self, conditioning, device):
-        self.controlnet_cond = [(s,guess,stop,cond.to(device, self.dtype)) for s,guess,stop,cond in conditioning]
+        self.controlnet_cond = [(s,guess,cond.to(device, self.dtype)) for s,guess,cond in conditioning]
 
     def __call__(self, latents, timestep, encoder_hidden_states, **kwargs):
-        unet_type = self.unet.model_type
         down_samples, mid_sample = None, None
         for i in range(len(self.controlnets)):
-            cn_type = self.controlnets[i].model_type
-            if (unet_type, cn_type) not in [("SDv1", "CN-v1"), ("SDXL-Base", "CN-XL")]:
-                raise RuntimeError(f"{cn_type} is not compatible with {unet_type}")
-
-            cn_scale, cn_guess, cn_stop, cn_cond = self.controlnet_cond[i]
-
-            if (1-cn_stop) * 1000 > timestep:
-                continue
+            cn_scale, cn_guess, cn_cond = self.controlnet_cond[i]
 
             down, mid = self.controlnets[i](
                 latents, timestep,
@@ -138,7 +124,6 @@ class ControlledUNET:
                 conditioning_scale=cn_scale,
                 return_dict=False,
                 guess_mode=cn_guess,
-                added_cond_kwargs = kwargs["added_cond_kwargs"]
             )
             if down_samples == None or mid_sample == None:
                 down_samples, mid_sample = down, mid
